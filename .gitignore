@@ -1,0 +1,12 @@
+
+# VS Code
+.vscode/
+
+# Intellij
+.idea/
+
+.DS_Store
+
+# binary
+pgoutbox
+

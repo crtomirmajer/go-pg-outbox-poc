@@ -1,0 +1,69 @@
+version: "3.7"
+
+
+networks:
+  net:
+    name: net
+
+
+services:
+
+  postgres:
+    image: postgres:15.2-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: test
+    ports:
+      - "5432:5432"
+    networks:
+      - net
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=5
+      - -c
+      - max_wal_senders=10
+      - -c 
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - listen_addresses=*
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready", "-d", "postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 10
+      start_period: 1s  
+
+  producer:
+    image: pgoutbox:0.0.1
+    environment:
+      DB_HOST: postgres
+    networks:
+      - net
+    command:
+      - ./pgoutbox
+      - -mode
+      - produce
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  consumer:
+    image: pgoutbox:0.0.1
+    environment:
+      DB_HOST: postgres
+    networks:
+      - net
+    command:
+      - ./pgoutbox
+      - -mode
+      - consume
+    depends_on:
+      postgres:
+        condition: service_healthy
