@@ -11,10 +11,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
+	"github.com/rs/zerolog/log"
 )
 
 const (
-	keepAliveFrequency = 10 * time.Second
+	keepAliveFrequency = 5 * time.Second
 	outputPlugin       = "pgoutput"
 	publicationName    = "outbox_publication"
 	slotName           = "outbox_slot"
@@ -51,6 +52,8 @@ func (p *Consumer) Run(ctx context.Context) error {
 	}
 	clientXLogPos := sysident.XLogPos
 
+	log.Info().Any("lsn", clientXLogPos).Msg("start-position")
+
 	err = pglogrepl.StartReplication(
 		ctx,
 		p.conn,
@@ -67,28 +70,33 @@ func (p *Consumer) Run(ctx context.Context) error {
 
 	nextStandbyMessageDeadline := time.Now().Add(keepAliveFrequency)
 
+	idx := 0
 	for ctx.Err() != context.Canceled {
 		if time.Now().After(nextStandbyMessageDeadline) {
 			// send status update evey N seconds
 			err := pglogrepl.SendStandbyStatusUpdate(
 				ctx,
 				p.conn,
-				pglogrepl.StandbyStatusUpdate{WALWritePosition: clientXLogPos},
+				pglogrepl.StandbyStatusUpdate{
+					WALWritePosition: clientXLogPos,
+					WALFlushPosition: clientXLogPos,
+					WALApplyPosition: clientXLogPos,
+				},
 			)
+			log.Info().Any("lsn", clientXLogPos).Msg("status-updated")
 			if err != nil {
 				return fmt.Errorf("failed to send standby update: %v", err)
 			}
 			nextStandbyMessageDeadline = time.Now().Add(keepAliveFrequency)
 		}
 
-		ctx, cancel := context.WithTimeout(ctx, keepAliveFrequency)
-		defer cancel()
-
-		rawMsg, err := p.conn.ReceiveMessage(ctx)
-		if pgconn.Timeout(err) {
-			continue
-		}
+		ctxTemp, cancel := context.WithDeadline(context.Background(), nextStandbyMessageDeadline)
+		rawMsg, err := p.conn.ReceiveMessage(ctxTemp)
+		cancel()
 		if err != nil {
+			if pgconn.Timeout(err) {
+				continue
+			}
 			return fmt.Errorf("something went wrong while listening for message: %v", err)
 		}
 
@@ -98,11 +106,19 @@ func (p *Consumer) Run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if msg != nil {
-			fmt.Println("latency: ", time.Since(msg.Time), "ID: ", msg.ID)
-		}
 		if pos != nil {
+			// available on COMMIT message
 			clientXLogPos = *pos
+		}
+		if msg != nil {
+			if idx%10000 == 0 {
+				log.Info().
+					Any("last-commit-lsn", clientXLogPos).
+					Dur("latency", time.Since(msg.Time)).
+					Str("ID", msg.ID).
+					Msg("message-received")
+			}
+			idx++
 		}
 	}
 
@@ -129,23 +145,34 @@ func parseMessage(rawMsg pgproto3.BackendMessage) (*pglogrepl.LSN, *message.Mess
 		if err != nil {
 			return nil, nil, fmt.Errorf("parseXLogData failed: %v", err)
 		}
-		clientXLogPos := xld.WALStart + pglogrepl.LSN(len(xld.WALData))
+		size := len(xld.WALData)
+		if size == 0 {
+			return nil, nil, fmt.Errorf("wal-data is missing")
+		}
+		clientXLogPos := xld.WALStart + pglogrepl.LSN(size)
 
 		switch xld.WALData[0] {
 		case 'M': // marks logical-decoding-message
 			m := new(LogicalDecodingMessage)
 			err := m.Decode(xld.WALData)
 			if err != nil {
-				return &clientXLogPos, nil, fmt.Errorf("error decoding wal-data: %v", err)
+				return nil, nil, fmt.Errorf("error decoding %T: %v", m, err)
 			}
 			msg := &message.Message{}
 			err = json.Unmarshal(m.Content, msg)
 			if err != nil {
-				return &clientXLogPos, nil, fmt.Errorf("error unmarshaling logical-decoding-message: %v \n\n %v \n\n %+v \n\n %v", err, string(protoMsg.Data), *m, string(m.Content))
+				return nil, nil, fmt.Errorf("error unmarshaling logical-decoding-message: %v \n\n %v \n\n %+v \n\n %v", err, string(protoMsg.Data), *m, string(m.Content))
 			}
-			return &clientXLogPos, msg, nil
+			return nil, msg, nil
+		case 'C':
+			m := new(pglogrepl.CommitMessage)
+			err := m.Decode(xld.WALData)
+			if err != nil {
+				return nil, nil, fmt.Errorf("error decoding %T: %v", m, err)
+			}
+			return &clientXLogPos, &message.Message{}, nil
 		}
-		// TODO: this code is hit on BEGIN and COMMIT - ignore for now, for simplicity
+		// TODO: this code is hit on BEGIN - ignore for now, for simplicity
 		return &clientXLogPos, nil, nil
 	}
 	return nil, nil, fmt.Errorf("unknown byte ID: %v", protoMsg.Data[0])

@@ -9,6 +9,7 @@ import (
 	"github.com/bluelabs-eu/pg-outbox/pkg/message"
 	"github.com/bluelabs-eu/pg-outbox/pkg/user"
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -41,8 +42,8 @@ func (p *Producer) Run(ctx context.Context) error {
 		if err := p.ExecuteCommand(ctx, i); err != nil {
 			return err
 		}
-		if i%100 == 0 {
-			fmt.Println("iteration", i)
+		if i%10000 == 0 {
+			log.Info().Uint64("iteration", i).Msg("write-finished")
 		}
 		i += 1
 	}
