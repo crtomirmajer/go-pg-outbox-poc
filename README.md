@@ -1,8 +1,18 @@
 # Usage
 
+Spin up:
 ```
 make docker
 make up
+```
+
+Scale producers:
+```
+make scale svc=producer n=1
+```
+
+Spin down:
+```
 make down
 ```
 

@@ -7,5 +7,8 @@ docker:
 up:
 	@cd deploy && docker-compose up -d
 
+scale:
+	@cd deploy && docker-compose up -d --scale $(svc)=$(n)
+
 down:
 	@cd deploy && docker-compose down
