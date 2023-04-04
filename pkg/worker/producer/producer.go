@@ -39,18 +39,22 @@ func New(ctx context.Context, connString string) (*Producer, error) {
 func (p *Producer) Run(ctx context.Context) error {
 	var i uint64
 	for ctx.Err() != context.Canceled {
-		if err := p.ExecuteCommand(ctx, i); err != nil {
+		m, err := p.ExecuteCommand(ctx, i)
+		if err != nil {
 			return err
 		}
 		if i%10000 == 0 {
-			log.Info().Uint64("iteration", i).Msg("write-finished")
+			log.Info().
+				Uint64("iteration", i).
+				Str("Msg", string(m.Payload)).
+				Msg("write-finished")
 		}
 		i += 1
 	}
 	return nil
 }
 
-func (p *Producer) ExecuteCommand(ctx context.Context, iteration uint64) error {
+func (p *Producer) ExecuteCommand(ctx context.Context, iteration uint64) (message.Message, error) {
 	// start business logic; for now, just fake some data
 
 	userID := fmt.Sprintf("%d", rand.Intn(numSimulatedUsers))
@@ -71,7 +75,8 @@ func (p *Producer) ExecuteCommand(ctx context.Context, iteration uint64) error {
 
 	// end business logic
 
-	return p.Persist(ctx, u, m)
+	err := p.Persist(ctx, u, m)
+	return m, err
 }
 
 func (p *Producer) Persist(ctx context.Context, u user.User, m message.Message) error {

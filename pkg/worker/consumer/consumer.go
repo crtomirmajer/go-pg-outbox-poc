@@ -36,6 +36,10 @@ func New(ctx context.Context, connString string) (*Consumer, error) {
 	}, nil
 }
 
+func (p *Consumer) Close(ctx context.Context) error {
+	return p.conn.Close(ctx)
+}
+
 func (p *Consumer) Run(ctx context.Context) error {
 
 	pluginArguments := []string{
@@ -72,6 +76,7 @@ func (p *Consumer) Run(ctx context.Context) error {
 
 	idx := 0
 	for ctx.Err() != context.Canceled {
+
 		if time.Now().After(nextStandbyMessageDeadline) {
 			// send status update evey N seconds
 			err := pglogrepl.SendStandbyStatusUpdate(
@@ -116,6 +121,7 @@ func (p *Consumer) Run(ctx context.Context) error {
 					Any("last-commit-lsn", clientXLogPos).
 					Dur("latency", time.Since(msg.Time)).
 					Str("ID", msg.ID).
+					Str("Msg", string(msg.Payload)).
 					Msg("message-received")
 			}
 			idx++
@@ -123,10 +129,6 @@ func (p *Consumer) Run(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-func (p *Consumer) Close(ctx context.Context) error {
-	return p.conn.Close(ctx)
 }
 
 func parseMessage(rawMsg pgproto3.BackendMessage) (*pglogrepl.LSN, *message.Message, error) {
@@ -145,35 +147,46 @@ func parseMessage(rawMsg pgproto3.BackendMessage) (*pglogrepl.LSN, *message.Mess
 		if err != nil {
 			return nil, nil, fmt.Errorf("parseXLogData failed: %v", err)
 		}
-		size := len(xld.WALData)
-		if size == 0 {
-			return nil, nil, fmt.Errorf("wal-data is missing")
-		}
-		clientXLogPos := xld.WALStart + pglogrepl.LSN(size)
-
-		switch xld.WALData[0] {
-		case 'M': // marks logical-decoding-message
-			m := new(LogicalDecodingMessage)
-			err := m.Decode(xld.WALData)
-			if err != nil {
-				return nil, nil, fmt.Errorf("error decoding %T: %v", m, err)
-			}
-			msg := &message.Message{}
-			err = json.Unmarshal(m.Content, msg)
-			if err != nil {
-				return nil, nil, fmt.Errorf("error unmarshaling logical-decoding-message: %v \n\n %v \n\n %+v \n\n %v", err, string(protoMsg.Data), *m, string(m.Content))
-			}
-			return nil, msg, nil
-		case 'C':
-			m := new(pglogrepl.CommitMessage)
-			err := m.Decode(xld.WALData)
-			if err != nil {
-				return nil, nil, fmt.Errorf("error decoding %T: %v", m, err)
-			}
-			return &clientXLogPos, &message.Message{}, nil
-		}
-		// TODO: this code is hit on BEGIN - ignore for now, for simplicity
-		return &clientXLogPos, nil, nil
+		return parseData(xld)
 	}
 	return nil, nil, fmt.Errorf("unknown byte ID: %v", protoMsg.Data[0])
+}
+
+func parseData(xld pglogrepl.XLogData) (*pglogrepl.LSN, *message.Message, error) {
+	size := len(xld.WALData)
+	if size == 0 {
+		return nil, nil, fmt.Errorf("wal-data is missing")
+	}
+	clientXLogPos := xld.WALStart + pglogrepl.LSN(size)
+
+	switch xld.WALData[0] {
+	case 'M': // marks logical-decoding-message
+		m := new(LogicalDecodingMessage)
+		err := m.Decode(xld.WALData)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error decoding %T: %v", m, err)
+		}
+		msg := &message.Message{}
+		err = json.Unmarshal(m.Content, msg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error unmarshaling logical-decoding-message: %v :: %v", err, string(m.Content))
+		}
+		return nil, msg, nil
+	case 'C': // marks commit
+		m := new(pglogrepl.CommitMessage)
+		err := m.Decode(xld.WALData)
+		if err != nil {
+			return nil, nil, fmt.Errorf("error decoding %T: %v", m, err)
+		}
+		return &clientXLogPos, &message.Message{}, nil
+	case 'B': // marks begin
+		return &clientXLogPos, nil, nil
+	}
+
+	// TODO: this code shouldn't be hit given the PUBLICATION setup
+	log.Warn().
+		Str("type", string(xld.WALData[0])).
+		Msg("message-received")
+
+	return &clientXLogPos, nil, nil
 }
