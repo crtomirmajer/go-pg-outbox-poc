@@ -39,6 +39,7 @@ func New(ctx context.Context, connString string) (*Producer, error) {
 func (p *Producer) Run(ctx context.Context) error {
 	var i uint64
 	for ctx.Err() != context.Canceled {
+		// Simulate serial changes on users
 		m, err := p.ExecuteCommand(ctx, i)
 		if err != nil {
 			return err
@@ -46,7 +47,7 @@ func (p *Producer) Run(ctx context.Context) error {
 		if i%10000 == 0 {
 			log.Info().
 				Uint64("iteration", i).
-				Str("Msg", string(m.Payload)).
+				Str("msg", string(m.Payload)).
 				Msg("write-finished")
 		}
 		i += 1
@@ -55,14 +56,17 @@ func (p *Producer) Run(ctx context.Context) error {
 }
 
 func (p *Producer) ExecuteCommand(ctx context.Context, iteration uint64) (message.Message, error) {
-	// start business logic; for now, just fake some data
+	// start business logic; it's a POC, so let's just fake some data :)
 
 	userID := fmt.Sprintf("%d", rand.Intn(numSimulatedUsers))
 
 	u := user.User{
 		ID:        userID,
 		FirstName: "user" + userID,
-		Details:   map[string]interface{}{"key": time.Now().Unix(), "random": rand.Int()},
+		Details: map[string]interface{}{
+			"key":    time.Now().Unix(),
+			"random": rand.Int(),
+		},
 		BirthDate: time.Now(),
 	}
 
@@ -120,7 +124,7 @@ func (p *Producer) Upsert(ctx context.Context, tx pgx.Tx, u user.User) error {
 func (p *Producer) Send(ctx context.Context, tx pgx.Tx, m message.Message) error {
 	_, err := tx.Exec(
 		ctx,
-		`SELECT * FROM pg_logical_emit_message(true, 'outbox', $1)`,
+		`select * from pg_logical_emit_message(true, 'outbox', $1)`,
 		m.Serialize(), // TODO: move serialization outside transaction, keep transactions as lean as possible
 	)
 	return err

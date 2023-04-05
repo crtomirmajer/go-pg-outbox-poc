@@ -1,4 +1,4 @@
-// NOTE: this should become part of pglogrepl
+// NOTE: this should be implemented in pglogrepl
 
 package consumer
 

@@ -5,7 +5,8 @@ CREATE TABLE IF NOT EXISTS users (
   birth_date DATE
 );
 
--- Note that publication doesn't include any TABLES - we'll only receive logical decoding messages, without table change-data
+-- Note how publication doesn't include any TABLES - we'll only receive logical decoding messages, without table change-data.
+-- NOTE: Is it event necessary to create it?
 CREATE PUBLICATION outbox_publication;
 
 -- Create a replication slot for "outbox messages", used in the consumer

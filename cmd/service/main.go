@@ -42,8 +42,6 @@ func main() {
 	case "consume":
 		// Use streaming-replication protocol with replication=1 (https://www.postgresql.org/docs/current/protocol-replication.html)
 		// To initiate streaming replication, the frontend sends the replication parameter in the startup message.
-		// A Boolean value of true (or on, yes, 1) tells the backend to go into physical replication walsender mode,
-		// wherein a small set of replication commands, shown below, can be issued instead of SQL statements.
 		worker, err = consumer.New(ctx, connectionString+" replication=database")
 	default:
 		err = fmt.Errorf("%v not implemented", mode)

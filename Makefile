@@ -1,3 +1,6 @@
+svc=producer
+n=1
+
 binary:
 	@go build -o pgoutbox cmd/service/main.go 
 

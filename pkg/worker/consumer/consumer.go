@@ -88,7 +88,11 @@ func (p *Consumer) Run(ctx context.Context) error {
 					WALApplyPosition: clientXLogPos,
 				},
 			)
-			log.Info().Any("lsn", clientXLogPos).Msg("status-updated")
+
+			log.Info().
+				Any("reported-lsn", clientXLogPos).
+				Msg("status-updated")
+
 			if err != nil {
 				return fmt.Errorf("failed to send standby update: %v", err)
 			}
@@ -118,10 +122,10 @@ func (p *Consumer) Run(ctx context.Context) error {
 		if msg != nil {
 			if idx%10000 == 0 {
 				log.Info().
-					Any("last-commit-lsn", clientXLogPos).
+					Any("last-committed-lsn", clientXLogPos).
 					Dur("latency", time.Since(msg.Time)).
 					Str("ID", msg.ID).
-					Str("Msg", string(msg.Payload)).
+					Str("payload", string(msg.Payload)).
 					Msg("message-received")
 			}
 			idx++
@@ -153,12 +157,14 @@ func parseMessage(rawMsg pgproto3.BackendMessage) (*pglogrepl.LSN, *message.Mess
 }
 
 func parseData(xld pglogrepl.XLogData) (*pglogrepl.LSN, *message.Message, error) {
+	// function to parse XLogData
 	size := len(xld.WALData)
 	if size == 0 {
 		return nil, nil, fmt.Errorf("wal-data is missing")
 	}
 	clientXLogPos := xld.WALStart + pglogrepl.LSN(size)
 
+	// only consider BEGIN, MESSAGE and COMMIT records
 	switch xld.WALData[0] {
 	case 'M': // marks logical-decoding-message
 		m := new(LogicalDecodingMessage)
@@ -178,15 +184,18 @@ func parseData(xld pglogrepl.XLogData) (*pglogrepl.LSN, *message.Message, error)
 		if err != nil {
 			return nil, nil, fmt.Errorf("error decoding %T: %v", m, err)
 		}
+		// return LSN of COMMIT
 		return &clientXLogPos, &message.Message{}, nil
 	case 'B': // marks begin
-		return &clientXLogPos, nil, nil
+		return nil, nil, nil
 	}
 
-	// TODO: this code shouldn't be hit given the PUBLICATION setup
+	// NOTE: this code shouldn't be hit given how the PUBLICATION is configured
 	log.Warn().
+		Any("lsn", clientXLogPos).
 		Str("type", string(xld.WALData[0])).
-		Msg("message-received")
+		Msg("unexpected-message-received")
 
-	return &clientXLogPos, nil, nil
+	// NOTE: we could as-well return error here, for the sake of simplicity, just ignore
+	return nil, nil, nil
 }
